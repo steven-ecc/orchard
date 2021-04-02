@@ -10,14 +10,18 @@ use halo2::{
 mod pow5t3;
 pub use pow5t3::{Pow5T3Chip, Pow5T3Config};
 
-/// The set of circuit instructions required to use the [`Poseidon`] gadget.
-pub trait PoseidonInstructions: Chip {
-    /// Variable representing the state over which the Poseidon permutation operates.
-    type State: fmt::Debug;
+use crate::primitives::poseidon::{Spec, State};
+
+/// The set of circuit instructions required to use the Poseidon permutation.
+pub trait PoseidonInstructions<S: Spec<Self::Field, T, RATE>, const T: usize, const RATE: usize>:
+    Chip
+{
+    /// Variable representing the word over which the Poseidon permutation operates.
+    type Word: fmt::Debug;
 
     /// Applies the Poseidon permutation to the given state.
     fn permute(
         layouter: &mut impl Layouter<Self>,
-        initial_state: &Self::State,
-    ) -> Result<Self::State, Error>;
+        initial_state: &State<Self::Word, T>,
+    ) -> Result<State<Self::Word, T>, Error>;
 }
