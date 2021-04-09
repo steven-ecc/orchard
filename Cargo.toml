@@ -36,7 +36,7 @@ plotters = { version = "0.3.0", optional = true }
 
 [dependencies.halo2]
 git = "https://github.com/zcash/halo2.git"
-rev = "b079624ea78b4a07d44cb3c725dd734093577062"
+rev = "4c9362c5045be801d56bc0062ae8bb699577cc72"
 
 [dependencies.pasta_curves]
 git = "https://github.com/zcash/pasta_curves.git"
