@@ -3,7 +3,7 @@
 use nonempty::NonEmpty;
 
 use crate::{
-    circuit::Proof,
+    circuit::{Instance, Proof},
     note::{EncryptedNote, NoteCommitment, Nullifier},
     primitives::redpallas::{self, Binding, SpendAuth},
     tree::Anchor,
@@ -34,8 +34,79 @@ pub struct Action<T> {
     authorization: T,
 }
 
+impl<T> Action<T> {
+    /// TODO: Decide whether to expose this, or only allow constructing actions that are
+    /// not `Action<redpallas::Signature<SpendAuth>>` via the builder.
+    pub(crate) fn from_parts(
+        nf_old: Nullifier,
+        rk: redpallas::VerificationKey<SpendAuth>,
+        cm_new: NoteCommitment,
+        encrypted_note: EncryptedNote,
+        cv_net: ValueCommitment,
+        authorization: T,
+    ) -> Self {
+        Action {
+            nf_old,
+            rk,
+            cm_new,
+            encrypted_note,
+            cv_net,
+            authorization,
+        }
+    }
+
+    /// Returns the commitment to the net value of this action.
+    pub fn cv_net(&self) -> &ValueCommitment {
+        &self.cv_net
+    }
+
+    pub(crate) fn to_instance(&self, flags: Flags, anchor: Anchor) -> Instance {
+        Instance {
+            anchor,
+            cv_net: self.cv_net.clone(),
+            nf_old: self.nf_old.clone(),
+            rk: self.rk.clone(),
+            cmx: self.cm_new.to_cmx(),
+            enable_spend: flags.spends_enabled,
+            enable_output: flags.outputs_enabled,
+        }
+    }
+
+    /// Transitions this action from one authorization state to another.
+    pub fn map<P: Authorization<SpendAuth = T>, U>(
+        self,
+        parent: &P,
+        step: impl FnOnce(&P, T) -> U,
+    ) -> Action<U> {
+        Action {
+            nf_old: self.nf_old,
+            rk: self.rk,
+            cm_new: self.cm_new,
+            encrypted_note: self.encrypted_note,
+            cv_net: self.cv_net,
+            authorization: step(parent, self.authorization),
+        }
+    }
+
+    /// Transitions this action from one authorization state to another.
+    pub fn try_map<P: Authorization<SpendAuth = T>, U, E>(
+        self,
+        parent: &P,
+        step: impl FnOnce(&P, T) -> Result<U, E>,
+    ) -> Result<Action<U>, E> {
+        Ok(Action {
+            nf_old: self.nf_old,
+            rk: self.rk,
+            cm_new: self.cm_new,
+            encrypted_note: self.encrypted_note,
+            cv_net: self.cv_net,
+            authorization: step(parent, self.authorization)?,
+        })
+    }
+}
+
 /// Orchard-specific flags.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Flags {
     spends_enabled: bool,
     outputs_enabled: bool,
@@ -51,33 +122,81 @@ pub trait Authorization {
 #[derive(Debug)]
 pub struct Bundle<T: Authorization> {
     actions: NonEmpty<Action<T::SpendAuth>>,
-    flag: Flags,
+    flags: Flags,
     value_balance: ValueSum,
     anchor: Anchor,
     authorization: T,
 }
 
 impl<T: Authorization> Bundle<T> {
+    /// TODO: Decide whether to expose this, or only allow constructing bundles that are
+    /// not `Bundle<Authorized>` via the builder.
+    pub(crate) fn from_parts(
+        actions: NonEmpty<Action<T::SpendAuth>>,
+        flags: Flags,
+        value_balance: ValueSum,
+        anchor: Anchor,
+        authorization: T,
+    ) -> Self {
+        Bundle {
+            actions,
+            flags,
+            value_balance,
+            anchor,
+            authorization,
+        }
+    }
+
     /// Computes a commitment to the effects of this bundle, suitable for inclusion within
     /// a transaction ID.
     pub fn commitment(&self) -> BundleCommitment {
         todo!()
     }
-}
 
-/// Marker for an unauthorized bundle with no proofs or signatures.
-#[derive(Debug)]
-pub struct Unauthorized {}
+    /// Transitions this bundle from one authorization state to another.
+    pub fn map<U: Authorization>(
+        self,
+        mut spend_auth: impl FnMut(&T, T::SpendAuth) -> U::SpendAuth,
+        step: impl FnOnce(T) -> U,
+    ) -> Bundle<U> {
+        let authorization = self.authorization;
+        Bundle {
+            actions: self.actions.map(|a| a.map(&authorization, &mut spend_auth)),
+            flags: self.flags,
+            value_balance: self.value_balance,
+            anchor: self.anchor,
+            authorization: step(authorization),
+        }
+    }
 
-impl Authorization for Unauthorized {
-    type SpendAuth = ();
+    /// Transitions this bundle from one authorization state to another.
+    pub fn try_map<U: Authorization, E>(
+        self,
+        mut spend_auth: impl FnMut(&T, T::SpendAuth) -> Result<U::SpendAuth, E>,
+        step: impl FnOnce(T) -> Result<U, E>,
+    ) -> Result<Bundle<U>, E> {
+        let authorization = self.authorization;
+        let new_actions = self
+            .actions
+            .into_iter()
+            .map(|a| a.try_map(&authorization, &mut spend_auth))
+            .collect::<Result<Vec<_>, E>>()?;
+
+        Ok(Bundle {
+            actions: NonEmpty::from_vec(new_actions).unwrap(),
+            flags: self.flags,
+            value_balance: self.value_balance,
+            anchor: self.anchor,
+            authorization: step(authorization)?,
+        })
+    }
 }
 
 /// Authorizing data for a bundle of actions, ready to be committed to the ledger.
 #[derive(Debug)]
 pub struct Authorized {
-    proof: Proof,
-    binding_signature: redpallas::Signature<Binding>,
+    pub(crate) proof: Proof,
+    pub(crate) binding_signature: redpallas::Signature<Binding>,
 }
 
 impl Authorization for Authorized {
