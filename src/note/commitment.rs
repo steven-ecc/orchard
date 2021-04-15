@@ -7,7 +7,7 @@ use pasta_curves::pallas;
 use crate::{
     constants::L_ORCHARD_BASE,
     primitives::sinsemilla,
-    spec::{prf_expand, to_scalar},
+    spec::{extract_p, prf_expand, to_scalar},
     value::NoteValue,
 };
 
@@ -51,5 +51,9 @@ impl NoteCommitment {
                 &rcm.0,
             ),
         )
+    }
+
+    pub(crate) fn to_cmx(&self) -> pallas::Base {
+        extract_p(&self.0)
     }
 }
